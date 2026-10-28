@@ -1381,6 +1381,14 @@ static int plmysql_prepare_stmt(DICT_MYSQL *dict_mysql, HOST *host)
     return (1);
 }
 
+ /*
+  * The client library formats FLOAT and DOUBLE values to fit the caller's
+  * buffer, so a 1-byte probe does not reveal their length. Fetch columns
+  * into at least this many bytes, more than any such value needs as text
+  * (for example, "-2.2250738585072014e-308").
+  */
+#define DICT_MYSQL_MIN_COLUMN_SIZE	64
+
 /*
  * plmysql_query_prepared - process a prepared MySQL query.  On success,
  *			store the accepted host's rows in result and set *found
@@ -1399,6 +1407,7 @@ static int plmysql_query_prepared(DICT_MYSQL *dict_mysql, const char *name,
     DICT_MYSQL_NULL *is_null;
     unsigned long *lengths;
     unsigned long column_length;
+    unsigned long column_size;
     char   *dummy;
     char   *column;
     int     num_fields;
@@ -1519,11 +1528,14 @@ static int plmysql_query_prepared(DICT_MYSQL *dict_mysql, const char *name,
 		 */
 		if (is_null[i])
 		    continue;
-		column = (char *) mymalloc(lengths[i] + 1);
+		column_size = lengths[i] + 1;
+		if (column_size < DICT_MYSQL_MIN_COLUMN_SIZE)
+		    column_size = DICT_MYSQL_MIN_COLUMN_SIZE;
+		column = (char *) mymalloc(column_size);
 		memset(&column_bind, 0, sizeof(column_bind));
 		column_bind.buffer_type = MYSQL_TYPE_STRING;
 		column_bind.buffer = column;
-		column_bind.buffer_length = lengths[i] + 1;
+		column_bind.buffer_length = column_size;
 		column_bind.length = &column_length;
 		column_length = 0;
 		if (mysql_stmt_fetch_column(host->stmt, &column_bind, i, 0) != 0) {
@@ -1531,6 +1543,15 @@ static int plmysql_query_prepared(DICT_MYSQL *dict_mysql, const char *name,
 		    msg_warn("%s:%s: prepared query fetch column failed: %s",
 			     dict_mysql->dict.type, dict_mysql->dict.name,
 			     mysql_stmt_error(host->stmt));
+		    myfree(column);
+		    break;
+		}
+		if (column_length >= column_size) {
+		    query_error = 1;
+		    msg_warn("%s:%s: prepared query column %d length %lu "
+			     "exceeds buffer size %lu",
+			     dict_mysql->dict.type, dict_mysql->dict.name,
+			     i, column_length, column_size);
 		    myfree(column);
 		    break;
 		}

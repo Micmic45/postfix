@@ -59,6 +59,7 @@ DROP PROCEDURE IF EXISTS alias_proc;
 DROP TABLE IF EXISTS aliases;
 DROP TABLE IF EXISTS virtual;
 DROP TABLE IF EXISTS bydomainpart;
+DROP TABLE IF EXISTS quotas;
 
 CREATE TABLE aliases (name VARCHAR(64), target VARCHAR(255));
 INSERT INTO aliases VALUES
@@ -77,6 +78,12 @@ CREATE TABLE bydomainpart (label1 VARCHAR(64), label2 VARCHAR(64), target VARCHA
 INSERT INTO bydomainpart VALUES
     ('com', 'example', 'example.com served here'),
     ('org', 'example', 'example.org served here');
+
+CREATE TABLE quotas (name VARCHAR(64), quota DOUBLE);
+INSERT INTO quotas VALUES
+    ('short',  12),
+    ('frac',   0.5),
+    ('long',   -2.2250738585072014e-308);
 
 DELIMITER //
 CREATE PROCEDURE alias_proc(IN p_name VARCHAR(64))
@@ -116,6 +123,7 @@ gen_pair limit    "query = SELECT target FROM aliases WHERE name = '%s'
 expansion_limit = 1"
 gen_pair constant "query = SELECT target FROM aliases WHERE name = 'postmaster'"
 gen_pair proc     "query = CALL alias_proc('%s')"
+gen_pair double   "query = SELECT quota FROM quotas WHERE name = '%s'"
 
 # ----------------------------------------------------------------------
 # Run a test case in both modes and diff the results.
@@ -207,7 +215,9 @@ run_pair_stdin() {
 # rationale. The null-value case here is the regression covered by the
 # is_null indicator added in plmysql_query_prepared() -- without it,
 # prepared mode would have warned and returned an empty string, while
-# legacy mode silently returns no result.
+# legacy mode silently returns no result. The double-* cases cover
+# DOUBLE columns, which the client library formats to fit the fetch
+# buffer.
 # ----------------------------------------------------------------------
 run_pair simple-found       aliases   postmaster
 run_pair simple-not-found   aliases   nonexistent
@@ -222,6 +232,9 @@ run_pair expansion-limit    limit     multi
 run_pair domain-parts       bydomain  user@example.com
 run_pair no-placeholder-empty constant ''
 run_pair_stdin procedure-repeat proc postmaster postmaster
+run_pair double-short       double    short
+run_pair double-frac        double    frac
+run_pair double-long        double    long
 
 echo
 echo "$PASS passed, $FAIL failed."
